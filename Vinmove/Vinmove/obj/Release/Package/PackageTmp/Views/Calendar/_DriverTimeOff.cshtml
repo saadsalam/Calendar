@@ -1,0 +1,22 @@
+﻿@using Vinmove.Models;
+@model IEnumerable<Calendar>
+
+
+
+
+<table class="table table-bordered">
+    @foreach (Calendar calnder in @Model)
+    {
+        //   string style = @calnder.VacationDesignation ="RD" ? "background-color:Red" : null;
+        //<tr style="@style">
+        <tr>
+            <td>
+
+                @calnder.DriverName <br />
+
+            </td>
+        </tr>
+    }
+
+
+</table>

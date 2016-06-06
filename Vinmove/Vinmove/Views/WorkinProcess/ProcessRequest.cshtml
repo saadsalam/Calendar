@@ -1,0 +1,43 @@
+﻿
+@{
+    var customerName = Request["customerName"];
+    var customerRequest = Request["customerRequest"];
+    try
+    {
+        // Initialize WebMail helper
+        WebMail.SmtpServer = "your-SMTP-host";
+        WebMail.SmtpPort = 25;
+        WebMail.EnableSsl = true;
+        WebMail.UserName = "your-user-name-here";
+        WebMail.From = "your-email-address-here";
+        WebMail.Password = "your-account-password";
+        // Send email
+        WebMail.Send(to: "target-email-address-here",
+        subject: "Help request from - " + customerName,
+        body: customerRequest
+        );
+    }
+    catch (Exception ex)
+    {
+        <text>
+            <b>The email was <em>not</em> sent.</b>
+            The code in the ProcessRequest page must provide an
+            SMTP server name, a user name, a password, and
+            a "from" address.
+        </text>
+    }
+}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Request for Assistance</title>
+</head>
+<body>
+    <p>Sorry to hear that you are having trouble, <b>@customerName</b>.</p>
+    <p>
+        An email message has been sent to our customer service
+        department regarding the following problem:
+    </p>
+    <p><b>@customerRequest</b></p>
+</body>
+</html>

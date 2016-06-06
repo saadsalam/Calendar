@@ -1,0 +1,38 @@
+﻿@using Vinmove.Models;
+@model IEnumerable<Calendar>
+
+
+
+
+
+    <table class="table-responsive">
+
+    @foreach (Calendar calnder in @Model)
+    {
+
+        string style = calnder.VacationDesignation == "RD" ? "background-color:Blue;color:white;font-size:small" :
+            calnder.VacationDesignation == "NJ" ? "background-color:Green;color:white;font-size:small" :
+            calnder.VacationDesignation == "SNY" ? "background-color:Sienna;color:white;font-size:small" :
+           calnder.VacationDesignation == "BR" ? "background-color:Olive;color:white;font-size:small": null;
+
+
+
+        <tr style="@style">
+            <td>
+                @calnder.DriverName
+            </td>
+            <td>
+                - @calnder.BenefitPaytype
+            </td>
+        </tr>
+
+    }
+
+</table>
+
+
+
+
+
+
+

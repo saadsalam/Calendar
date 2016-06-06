@@ -1,0 +1,45 @@
+﻿@model Vinmove.Models.Employee
+
+
+@{
+    ViewBag.Title = "Employee Details";
+}
+
+<h2>Employee Details</h2>
+
+<table style="font-family:Arial" border="1">
+    <tr>
+        <td>
+            Employee ID:
+        </td>
+        <td>
+            @Model.UserId
+        </td>
+    </tr>
+    <tr>
+        <td>
+            First Name:
+        </td>
+        <td>
+            @Model.FirstName
+        </td>
+    </tr>
+    <tr>
+        <td>
+            Last Name:
+        </td>
+        <td>
+            @Model.LastName
+        </td>
+    </tr>
+    <tr>
+        <td>
+            User Code:
+        </td>
+        <td>
+            @Model.UserCode
+        </td>
+    </tr>
+</table>
+
+@Html.ActionLink("Back to CNN", "index");

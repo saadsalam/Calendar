@@ -1,0 +1,23 @@
+﻿
+
+    @model IEnumerable<Vinmove.Models.Calendar>
+
+<table>
+    @foreach (var item in @Model)
+    {
+     
+
+                string style = item.VacationDesignation =="RD" ? "background-color:Red" : null;
+                
+<tr style="@style">
+        
+            <td>
+
+                @item.DriverName <br />
+
+            </td>
+        </tr>
+    }
+
+
+</table>

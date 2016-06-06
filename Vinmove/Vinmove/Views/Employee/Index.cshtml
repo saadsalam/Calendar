@@ -1,0 +1,116 @@
+﻿
+@using Vinmove.Models;
+@model IEnumerable<Employee>
+
+@{
+    Layout = "~/Views/Shared/_Layout.cshtml";
+}
+
+@{
+    ViewBag.Title = "Index";
+}
+
+
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="http://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.0/jquery.min.js"></script>
+    <script src="http://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/js/bootstrap.min.js"></script>
+    <title>Index</title>
+</head>
+
+
+
+<body>
+    
+    <ul class="nav nav-pills nav-stacked">
+        <li class="active"><a data-toggle="pill" href="#home">Account Executives</a></li>
+        <li><a data-toggle="pill" href="#menu1">Accounting</a></li>
+        <li><a data-toggle="pill" href="#menu2">Super Tours</a></li>
+ 
+        <li><a data-toggle="pill" href="#menu1">Outside Sales</a></li>
+        <li><a data-toggle="pill" href="#menu2">Ridgefield</a></li>
+        <li><a data-toggle="pill" href="#menu1">Brookfield</a></li>
+        <li><a data-toggle="pill" href="#menu2">Port-Newark-TLS</a></li>
+        <li><a data-toggle="pill" href="#menu1">Mechanicville</a></li>
+        <li><a data-toggle="pill" href="#menu2">Selkirk</a></li>
+        <li><a data-toggle="pill" href="#menu1">Davisville</a></li>
+        <li><a data-toggle="pill" href="#menu2">Yard Operation</a></li>
+
+        <li><a data-toggle="pill" href="#menu1">VPC</a></li>
+        <li><a data-toggle="pill" href="#menu2">Portside</a></li>
+
+        <li><a data-toggle="pill" href="#menu1">Mystic Marine Fuel</a></li>
+        <li><a data-toggle="pill" href="#menu2">Fax Numbers</a></li>
+
+        <li><a data-toggle="pill" href="#menu1">Security</a></li>
+        <li><a data-toggle="pill" href="#menu2">Intercom/Pages</a></li>
+
+
+
+
+    </ul>
+
+    <div class="tab-content">
+        <div id="home" class="tab-pane fade in active">
+
+
+            <div class="container">
+                <table class="table table-bordered table-responsive table-hover">
+                    <thead>
+                        <tr style="background-color:green;color:white">
+
+                            <th>Name</th>
+                            <th>Extension</th>
+                            <th>Phone</th>
+
+                        <tr>
+                    </thead>
+
+
+
+                    @foreach (Employee employee1 in @Model)
+                    {
+                        <tr>
+                            <td>
+                                @employee1.FullName
+                            </td>
+                            <td>
+                                @employee1.Extension
+                            </td>
+                            <td>
+                                @employee1.Phone
+                            </td>
+                        </tr>
+                    }
+
+
+
+
+                </table>
+            </div>
+            </div>
+
+        <div id="menu1" class="tab-pane fade">
+            <h3>Menu 1</h3>
+            @foreach (Employee employee in @Model)
+            {
+                
+                    @employee.FullName
+                    @employee.Extension
+                    @employee.Phone
+                
+
+            }
+        </div>
+        <div id="menu2" class="tab-pane fade">
+            <h3>Menu 2</h3>
+            <p>Some content in menu 2.</p>
+        </div>
+    </div>
+
+       
+
+</body>
+</html>

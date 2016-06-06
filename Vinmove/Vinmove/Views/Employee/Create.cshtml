@@ -1,0 +1,125 @@
+﻿@model Vinmove.Models.Employee
+
+
+
+@{
+    ViewBag.Title = "Create";
+}
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="http://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.0/jquery.min.js"></script>
+    <script src="http://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/js/bootstrap.min.js"></script>
+    <title>Index</title>
+</head>
+<body>
+
+
+    <div class="container">
+
+        
+
+        <div class="form-group">
+            @using (Html.BeginForm("create", "Employee"))
+            {
+                @Html.AntiForgeryToken()
+                @Html.ValidationSummary(true)
+               <fieldset>
+                 <legend>Create</legend>
+                    <table border="1">
+                      
+                        
+
+
+                        <tr></tr>
+                          <tr>
+                            <td> @Html.LabelFor(model => model.FullName)</td>
+                              <td>@Html.TextBoxFor(model => model.FullName)
+                               @Html.ValidationMessageFor(model => model.FullName)
+                                    
+                               
+
+                             </td>
+                           
+                         </tr>
+                       <tr><td></td><td></td></tr>
+
+                        <tr><td>@Html.LabelFor(model => model.Designation)</td>
+                            <td>
+                                @Html.TextBoxFor(model => model.Designation)
+                                @Html.ValidationMessageFor(model => model.Designation)
+                            </td>
+                            </tr>
+                        <tr></tr>
+                        <tr>
+                            <td>@Html.LabelFor(model => model.Division)</td>
+                             <td>@Html.TextBoxFor(model => model.Division)
+                                @Html.ValidationMessageFor(model => model.Division)
+                            </td>
+                        </tr>
+
+
+                        <tr>
+                            <td> @Html.LabelFor(model => model.Extension)</td>
+                                <td>@Html.TextBoxFor(model => model.Extension)
+                                @Html.ValidationMessageFor(model => model.Extension)
+                            </td>
+                        </tr>
+
+
+                        <tr>
+                            <td>
+                                @Html.LabelFor(model => model.Phone)</td>
+                                <td>@Html.TextBoxFor(model => model.Phone)
+                                @Html.ValidationMessageFor(model => model.Phone)
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <td>
+                                @Html.LabelFor(model => model.DivisonSortOrder)</td>
+                               <td>@Html.TextBoxFor(model => model.DivisonSortOrder)
+                                @Html.ValidationMessageFor(model => model.DivisonSortOrder)
+                            </td>
+                        </tr>
+
+
+                        <tr>
+                            <td> @Html.LabelFor(model => model.SortOrder)</td>
+
+                                <td>@Html.TextBoxFor(model => model.SortOrder)
+                                @Html.ValidationMessageFor(model => model.SortOrder)
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <td>@Html.LabelFor(model => model.Recordstatus)</td>
+                              <td>@Html.TextBoxFor(model => model.Recordstatus)
+                                @Html.ValidationMessageFor(model => model.Recordstatus)
+                            </td>
+                        </tr>
+                        <tr></tr>
+                        <tr><td></td>
+                        <td><input type="submit" value="Save" /></td>
+                        </tr>
+                    </table>
+
+                   
+
+               </fieldset>
+            }
+            <p>
+        </div>
+
+        </div>
+
+
+
+
+</body>
+
+
+</html>

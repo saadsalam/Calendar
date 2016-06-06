@@ -1,0 +1,169 @@
+﻿
+@using Vinmove.Models;
+@model IEnumerable<Calendar>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="http://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.0/jquery.min.js"></script>
+    <script src="http://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/js/bootstrap.min.js"></script>
+    <title>Index</title>
+</head>
+<body>
+
+    <section id="main">
+        <script type="text/javascript">
+            // some code
+            $(document).ready(function () {
+                $("#MonthData").change(function () {
+                    $("#log").ajaxError(function (event, jqxhr, settings, exception) {
+                        alert(exception);
+                    });
+
+                    var monthSelected = $2;
+                    $.get('@Url.Action("Details")',
+                        { id: monthSelected }, function (data) {
+                            $("#target").html(data);
+                        });
+                });
+            });
+
+
+        </script>
+     
+    </section>
+
+
+    <div class="container" id="target">
+       
+              <h1>@ViewBag.Monthname 2016</h1>
+            <select name="year">
+                @for (var i = 0; i < 6; i++)
+                {
+
+                    <option>@(DateTime.Now.AddYears(i).Year)</option>
+                }
+            </select>
+
+
+
+       @Html.DropDownList("MonthData", "MonthData")
+
+        
+      
+        @**Html.ActionLink("Refresh", "Details", new { id = @ViewBag.MonthData }, new { btnName = "btnEditItem", @class = "btn btn-default btn-xs" })*@
+
+
+
+
+           
+        <table class="table table-bordered table-responsive table-hover">
+            <thead>
+                <tr style="background-color:black;color:white">
+
+                    <th>Sunday</th>
+                    <th>Monday</th>
+                    <th>Tuesday</th>
+                    <th>Wednesday</th>
+                    <th>Thursday</th>
+                    <th>Friday</th>
+                    <th>Saturday
+                </tr>
+            </thead>
+
+
+
+
+
+            @foreach (Calendar calnder in @Model)
+            {
+
+                
+               
+    
+                <tr>
+                    <td align="center" >
+                        <strong>@calnder.i1CalendarDate</strong><br />
+
+                        <strong>@calnder.i1HolidayName</strong><br />
+
+
+                        @{Html.RenderAction("Index", "Calendar", new { id = "'" + calnder.i1CalendarDate + "'" });}
+
+
+                    </td>
+                    <td align="center" >
+                        <strong>@calnder.i2CalendarDate</strong>
+                        <br />
+                        <strong>@calnder.i2HolidayName</strong><br />
+
+                        @{Html.RenderAction("Index", "Calendar", new { id = "'" + calnder.i2CalendarDate + "'" });}
+
+                    </td>
+
+
+                    <td align="center" >
+                        <strong>@calnder.i3CalendarDate</strong>
+                        <br />
+                        <strong>@calnder.i3HolidayName</strong><br />
+
+                        @{Html.RenderAction("Index", "Calendar", new { id = "'" + calnder.i3CalendarDate + "'" });}
+
+                    </td>
+                    <td align="center" >
+                        <strong>@calnder.i4CalendarDate</strong>
+                        <br />
+                        <strong>@calnder.i4HolidayName</strong><br />
+
+                        @{Html.RenderAction("Index", "Calendar", new { id = "'" + calnder.i4CalendarDate + "'" });}
+                    </td>
+
+                    <td align="center" >
+                        <strong>
+                            @calnder.i5CalendarDate
+                        </strong>
+
+                        <br />
+                        <strong>@calnder.i5HolidayName</strong><br />
+
+                        @{Html.RenderAction("Index", "Calendar", new { id = "'" + calnder.i5CalendarDate + "'" });}
+
+
+
+
+                    </td>
+
+                    <td align="center" >
+                        <strong>@calnder.i6CalendarDate</strong>
+                        <br />
+                        <strong>@calnder.i6HolidayName</strong><br />
+
+                        @{Html.RenderAction("Index", "Calendar", new { id = "'" + calnder.i6CalendarDate + "'" });}
+
+
+                    </td>
+
+
+                    <td align="center" >
+                        <strong>@calnder.i7CalendarDate</strong>
+                        <br />
+                        <strong>@calnder.i7HolidayName</strong><br />
+
+                        @{Html.RenderAction("Index", "Calendar", new { id = "'" + calnder.i7CalendarDate + "'" });}
+                    </td>
+
+                </tr>
+
+            }
+
+        </table>
+
+
+
+            </div>
+       
+</body>
+
+</html>

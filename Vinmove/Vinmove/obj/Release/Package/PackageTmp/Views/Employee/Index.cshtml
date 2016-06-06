@@ -1,0 +1,22 @@
+﻿
+
+@using Vinmove.Models;
+@model IEnumerable<Employee>
+
+@{
+    ViewBag.Title = "Index";
+}
+
+<h2>Index</h2>
+
+
+<h2>User List</h2>
+<ul>
+    @foreach ( Employee employee in @Model)
+    {
+        <li>
+           @employee.FirstName
+    </li>
+    }
+</ul>
+
