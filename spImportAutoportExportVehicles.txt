@@ -1,0 +1,742 @@
+USE [AutoExport_Test]
+GO
+/****** Object:  StoredProcedure [dbo].[spImportAutoportExportVehicles]    Script Date: 6/28/2017 12:11:34 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+-- =============================================
+-- Author:		David Maibor
+-- Create date: 6/27/17
+-- Description:	Process Import table VINS for the specified batch.
+--	Insert new recs/Update existing recs in the AutoportExportVehicles table
+-- =============================================
+ALTER PROCEDURE [dbo].[spImportAutoportExportVehicles]
+	@BatchID int,
+	@UserCode varchar (20)
+AS
+BEGIN
+	-- SET NOCOUNT ON added to prevent extra result sets from
+	-- interfering with SELECT statements.
+	SET NOCOUNT ON;
+
+	BEGIN TRY
+
+	-- Create tbl variable, @tmp_output to hold all recs in the Import table for the batch. After processing,
+	--	update the Import table RecordStatus field with the value in @tmp_output
+	-- NOTEs: 
+	-- 1) There may be multiple recs for the 
+	--	same VIN (Yard operator scanned veh. more than once, or handheld malfunction)
+	-- 2) Primarily the Import table holds new VINs not in the veh tbl (set as NOMATCH recs)
+	--	and updated VINS, one rec in the veh tbl (set as ONEMATCH recs)
+	-- 3) BayLocation_imp, VIVTagNumber_imp are the BayLoc & VIVTag# entered by the User. For ONEMATCH VINs, 
+	--	BayLocation_veh, VIVTagNumber_veh are the BayLoc & VIVTab# currently in the veh table
+
+	DECLARE @debug bit = 0;
+
+	-- Local Variables
+	DECLARE
+	@Bayloc_current varchar(20),
+	@Bayloc_new varchar(20),
+	@CreationDate Datetime = CURRENT_TIMESTAMP,
+	@ID_dups int = 0,
+	@ID_dups_current int,
+	@ID_dups_max int,
+	@ID_output int,
+	@VIN varchar(20),
+	@VIVTagNumber_current varchar(10),
+	@VIVTagNumber_new varchar(10),
+	@fullname varchar (65);
+
+	DECLARE
+	@tmp_output TABLE
+	(ImportID int,
+	VIN varchar(17),
+	CustomerID int,
+	DestinationName varchar(20),
+	SizeClass varchar(20),
+	VoyageID int,
+	EntryRate decimal(19,2),
+	PerDiemGraceDays int,
+	status varchar(100),
+	Inspector varchar(30),
+	importstatus varchar(100),
+	importedind int,
+	BayLocation_imp varchar(20),
+	BayLocation_veh varchar(20),
+	VIVTagNumber_veh varchar(10),
+	VIVTagNumber_imp varchar(10),
+	CreationDate datetime);
+
+	-- Fill @tmp_output with orig recs from import table for the Batch
+	INSERT INTO @tmp_output (ImportID,VIN,CustomerID,
+	DestinationName,SizeClass,Inspector,BayLocation_imp,
+	VIVTagNumber_imp,CreationDate)
+	SELECT AutoportExportVehiclesImportID AS ImportID,
+	imp.VIN,
+	cus.CustomerID,
+	imp.DestinationName,
+	imp.SizeClass,
+	imp.Inspector,
+	imp.BayLocation AS BayLocation_imp,
+	RTRIM(ISNULL(imp.VIVTagNumber,'')) AS VIVTagNumber_imp,
+	imp.CreationDate
+	FROM AutoportExportVehiclesImport imp
+	LEFT OUTER JOIN Customer cus on cus.HandheldScannerCustomerCode=imp.CustomerName 
+		AND cus.AutoportExportCustomerInd=1
+	WHERE BatchID=@BatchID;
+
+	-- Get fullname from Users table based on Inspector in @tmp_output
+	-- Use for LastPhysicalBy & ReceivedBy in veh. table
+	SELECT TOP 1 @fullname = RTRIM(Users.FirstName) + ' ' + RTRIM(Users.LastName) 
+	FROM @tmp_output tmp
+	INNER JOIN Users on Users.UserCode=tmp.Inspector;
+
+	-- ** ERROR CHECKING **
+
+	-- Ck for 'SHOWS AS SHIPPED'
+	with shippedvehs AS
+	(SELECT veh.VIN,COUNT(veh.VIN) AS totrecs
+	FROM AutoportExportVehicles veh
+	INNER JOIN @tmp_output tmp on tmp.VIN = veh.VIN 
+	WHERE veh.DateShipped IS NOT NULL 
+	AND tmp.CustomerID=veh.CustomerID
+	GROUP BY veh.VIN 
+	HAVING COUNT(tmp.VIN) > 0)
+	UPDATE @tmp_output SET status = 'SHOWS AS SHIPPED',importstatus = 'SHOWS AS SHIPPED'
+	WHERE VIN IN (SELECT VIN FROM shippedvehs);
+
+	-- Ck for 'CUSTOMER NOT FOUND' recs
+	UPDATE tmp
+	SET tmp.status = 'CUSTOMER NOT FOUND',tmp.importstatus='CUSTOMER NOT FOUND'
+	FROM
+	@tmp_output tmp
+	LEFT OUTER JOIN Customer cus on cus.CustomerID=tmp.CustomerID
+	WHERE cus.CustomerID IS NULL AND tmp.status IS NULL;
+
+	-- Ck for 'DESTINATION NOT FOUND' recs
+	UPDATE tmp
+	SET tmp.status = 'DESTINATION NOT FOUND',importstatus = 'DESTINATION NOT FOUND'
+	FROM
+	@tmp_output tmp
+	LEFT OUTER JOIN Code on Code.CodeType='ExportDischargePort'
+		AND Code.Value2=tmp.DestinationName
+	WHERE Code.Value2 IS NULL AND tmp.status IS NULL;
+
+	-- Ck for 'INSPECTOR NOT FOUND' recs
+	UPDATE tmp
+	SET tmp.status = 'INSPECTOR NOT FOUND',tmp.importstatus = 'INSPECTOR NOT FOUND'
+	FROM
+	@tmp_output tmp
+	LEFT OUTER JOIN Users on Users.UserCode=tmp.Inspector
+	WHERE Users.UserCode IS NULL AND tmp.status IS NULL;
+
+	-- Ck for 'MULTIPLE MATCHES' recs in veh table	
+	WITH multi AS
+	(SELECT veh.VIN,COUNT(veh.VIN) AS totrecs
+	FROM AutoportExportVehicles veh 
+	WHERE veh.VIN IN 
+	(SELECT DISTINCT VIN FROM @tmp_output WHERE status IS NULL) 
+	GROUP BY VIN
+	HAVING COUNT(veh.VIN) > 1)
+	UPDATE @tmp_output SET status = 'MULTIPLE MATCHES FOR VIN',importstatus='MULTIPLE MATCHES FOR VIN'
+	WHERE VIN in (SELECT VIN FROM multi);
+
+	-- ** ID remaining recs as NOMATCH/ONEMATCH
+
+	-- Ck for 'ONEMATCH' recs, one rec w/same VIN in the veh table
+	WITH single AS
+	(SELECT veh.VIN,COUNT(veh.VIN) AS totrecs
+	FROM AutoportExportVehicles veh 
+	WHERE veh.VIN IN 
+	(SELECT DISTINCT VIN FROM @tmp_output WHERE status IS NULL) 
+	GROUP BY VIN
+	HAVING COUNT(veh.VIN) = 1)
+	UPDATE @tmp_output SET status = 'ONEMATCH'
+	WHERE VIN in (SELECT VIN FROM single);
+
+	-- ** ERROR CHECKING FOR ONEMATCH recs **
+	-- Ck 'ONEMATCH' recs for 'CUSTOMER MISMATCH'
+	UPDATE tmp
+	SET status = 'CUSTOMER MISMATCH',importstatus='CUSTOMER MISMATCH'
+	FROM
+	@tmp_output tmp
+	INNER JOIN AutoportExportVehicles veh on veh.VIN=tmp.VIN
+	WHERE veh.CustomerID <> tmp.CustomerID;
+
+	-- Ck 'ONEMATCH' recs for 'DESTINATION MISMATCH'
+	UPDATE tmp
+	SET status = 'DESTINATION MISMATCH',importstatus='DESTINATION MISMATCH'
+	FROM
+	@tmp_output tmp
+	INNER JOIN AutoportExportVehicles veh on veh.VIN=tmp.VIN
+	WHERE veh.DestinationName <> tmp.DestinationName;
+	
+	-- ** ID NOMATCH recs
+
+	-- Update remaining recs as 'NOMATCH'
+	UPDATE @tmp_output SET status = 'NOMATCH'
+	WHERE status IS NULL;
+
+	-- Process NOMATCH & ONEMATCH recs in @tmp_output while considering dup VINs 
+	--	(same VIN scanned more than once in batch)
+
+	-- Create tmp_dups, to hold 2nd, 3rd, ... scan of same VIN
+	DECLARE
+	@tmp_dups TABLE
+	(ID int,
+	ImportID int,
+	VIN varchar(17),
+	CustomerID int,
+	DestinationName varchar(20),
+	VoyageID int,
+	EntryRate decimal(19,2),
+	PerDiemGraceDays int,
+	status varchar(100),
+	Inspector varchar(30),
+	importstatus varchar(100),
+	importedind int,
+	BayLocation_imp varchar(20),
+	BayLocation_veh varchar(20),
+	DateReceived datetime,
+	VehicleStatus varchar(20),
+	VIVTagNumber_imp varchar(10),
+	VIVTagNumber_veh varchar(10));
+
+	
+
+	--	PROCESS NOMATCH recs, if found
+	IF EXISTS (SELECT VIN FROM @tmp_output WHERE status='NOMATCH')
+		BEGIN			
+			-- Load tmp_dups with any dup NOMATCH VINS, #0
+			WITH dupVINs AS
+			(select VIN,COUNT(VIN) AS totrecs 
+			from @tmp_output 
+			WHERE status='NOMATCH'
+			group by VIN
+			Having COUNT(VIN) > 1)
+			INSERT INTO @tmp_dups (ImportID,VIN,BayLocation_imp)
+			SELECT ImportID,VIN,BayLocation_imp from 
+			@tmp_output
+			WHERE VIN IN (SELECT VIN FROM dupVINs)
+			ORDER BY ImportID;
+
+			-- Remove from @tmp_dups, 1st row for each VIN, will be inserted as new rec in veh table 
+			WITH CTE AS
+			(SELECT *,ROW_NUMBER() OVER (PARTITION BY VIN ORDER BY VIN,ImportID) AS RN FROM @tmp_dups)
+			DELETE FROM CTE WHERE RN=1;
+
+			-- Update @tmp_output, set Status to 'DUP' for each row in tmp_dups
+			UPDATE @tmp_output SET status='DUP' WHERE ImportID in (SELECT ImportID from @tmp_dups);
+
+			-- Update NOMATCH recs in @tmp_output with EntryRate, PerDiemGraceDays
+			UPDATE tmp
+			SET EntryRate=rates.EntryFee,
+			PerDiemGraceDays = rates.PerDiemGraceDays
+			FROM @tmp_output tmp
+			INNER JOIN AutoportExportRates rates on rates.CustomerID=tmp.CustomerID AND
+				rates.RateType = 'Size ' + tmp.SizeClass + ' Rate'
+			WHERE tmp.status='NOMATCH' AND tmp.SizeClass IS NOT NULL
+				AND tmp.CreationDate >= rates.StartDate
+				AND tmp.CreationDate < DATEADD(day,1,ISNULL(rates.EndDate,'12/31/2099'));
+
+			-- Update NOMATCH recs in @tmp_output with VoyageID, if found
+			-- Create @tmp_voyage to hold all voyageID for each ImportID
+			DECLARE @tmp_voyage TABLE
+			(ImportID int,
+			CustomerID int,
+			DestinationName varchar(100),
+			AEVoyageID int,
+			VoyageDate datetime);
+
+			-- use CTE to fiLl @tmp_voyage
+			WITH voyIDs AS	
+			(SELECT tmp.ImportID,tmp.CustomerID,tmp.DestinationName, 
+			voy.AEVoyageID,voy.VoyageDate
+			FROM @tmp_output tmp
+			LEFT OUTER JOIN Code on Code.CodeType='ExportDischargePort' AND Code.Value2=tmp.DestinationName
+			LEFT OUTER JOIN AEVoyageCustomer voycust on voycust.CustomerID=tmp.CustomerID
+			LEFT OUTER JOIN AEVoyageDestination voydest on voydest.AEVoyageID=voycust.AEVoyageID
+			LEFT OUTER JOIN AEVoyage voy on voy.AEVoyageID=voycust.AEVoyageID
+			WHERE tmp.status = 'NOMATCH' AND
+			voydest.DestinationName=Code.Code AND
+			voy.VoyageClosedInd = 0 AND 
+			voy.VoyageDate >= CONVERT(varchar(10),CURRENT_TIMESTAMP,101))
+			INSERT INTO @tmp_voyage SELECT * FROM voyIDs;
+
+			-- use CTE to order ImportIDs by VoyageDate in @tmp_voyage
+			WITH voyorderd AS
+			(SELECT *,ROW_NUMBER() OVER (PARTITION BY ImportID ORDER BY VoyageDate) AS RN FROM @tmp_voyage)
+			DELETE FROM voyorderd WHERE RN>1;
+
+			-- Update NOMATCH @tmp_output recs with VoyageID
+			UPDATE out
+			SET VoyageID = voy.AEVoyageID
+			FROM @tmp_output out
+			INNER JOIN @tmp_voyage voy on voy.ImportID=out.ImportID
+			WHERE out.status = 'NOMATCH';
+	
+			-- Insert NOMATCH recs in @tmp_output as new recs into veh table
+			--	Use @CreationDate to permit Deleting new recs, if necessary in CATCH below
+			INSERT INTO AutoportExportVehicles
+			(CustomerID,VehicleYear,Make,Model,Bodystyle,
+			VIN,Color,VehicleLength,VehicleWidth,
+			VehicleHeight,
+			VehicleWeight,VehicleCubicFeet,VehicleStatus,
+			DestinationName,BookingNumber,SizeClass,
+			BayLocation,EntryRate,EntryRateOverrideInd,
+			PerDiemGraceDays,PerDiemGraceDaysOverrideInd,
+			TotalCharge,DateReceived,BilledInd,VINDecodedInd,
+			Note,RecordStatus,CreationDate,CreatedBy,CreditHoldInd,
+			CustomsApprovalPrintedInd,VoyageID,
+			CustomsCoverSheetPrintedInd,NoStartInd,
+			LastPhysicalDate,HasAudioSystemInd,
+			HasNavigationSystemInd,CustomsApprovedCoverSheetPrintedInd,
+			ReceivedBy,LastPhysicalBy,BarCodeLabelPrintedInd,
+			VIVTagNumber,MechanicalExceptionInd,LeftBehindInd)
+			SELECT
+			tmp.CustomerID,
+			imp.VehicleYear,
+			imp.Make,
+			imp.Model,
+			imp.Bodystyle,
+			imp.VIN,
+			imp.Color,
+			imp.VehicleLength,
+			imp.VehicleWidth,
+			imp.VehicleHeight,
+			imp.VehicleWeight,
+			imp.VehicleCubicFeet,
+			'Received' AS VehicleStatus,
+			Code.Code AS DestinationName,
+			'REC' AS BookingNumber,
+			imp.SizeClass,
+			imp.BayLocation,
+			tmp.EntryRate,
+			0 AS EntryRateOverrideInd,
+			tmp.PerDiemGraceDays,
+			0 AS PerDiemGraceDaysOverrideInd,
+			0 AS TotalCharge,
+			imp.CreationDate AS DateReceived,
+			0 AS BilledInd,
+			imp.VINDecodedInd,
+			'' AS Note,
+			'Active' AS RecordStatus,
+			@CreationDate AS CreationDate,
+			@UserCode AS CreatedBy,
+			0 AS CreditHoldInd,
+			0 AS CustomsApprovalPrintedInd,
+			tmp.VoyageID,
+			0 AS CustomsCoverSheetPrintedInd,
+			CASE
+				WHEN imp.RunnerInd = 0 THEN 1
+				ELSE 0
+			END AS NoStartInd,
+			@CreationDate AS LastPhysicalDate,
+			imp.AudioSystemFlag AS HasAudioSystemInd,
+			imp.NavigationSystemFlag AS HasNavigationSystemInd,
+			0 AS CustomsApprovedCoverSheetPrintedInd,
+			@fullname AS ReceivedBy,
+			@fullname AS LastPhysicalBy,
+			0 AS BarCodeLabelPrintedInd,
+			imp.VIVTagNumber,
+			0 AS MechanicalExceptionInd,
+			0 AS LeftBehindInd
+			FROM @tmp_output tmp
+			INNER JOIN AutoportExportVehiclesImport imp on imp.AutoportExportVehiclesImportID=tmp.ImportID
+			LEFT OUTER JOIN Code on Code.CodeType='ExportDischargePort' AND Code.Value2=tmp.DestinationName
+			WHERE tmp.status = 'NOMATCH';
+	
+			-- Update importstatus in @tmp_output to 'Imported' & importedind
+			UPDATE @tmp_output SET importstatus='Imported',importedind=1
+			WHERE status = 'NOMATCH';
+
+			-- Update status on NOMATCH recs to 'NEXT VOYAGE NOT FOUND' 
+			--	IF VoyageID IS NULL
+			UPDATE @tmp_output
+			SET status = 'NEXT VOYAGE NOT FOUND'
+			WHERE status = 'NOMATCH' AND VoyageID IS NULL;
+
+			-- Process NOMATCH VINS with dups, if any: 
+			--	1st rec inserted above as new rec in veh table. 
+			--	For each dup VIN rec: Ck for 'CUSTOMER MISMATCH', 'DESTINATION MISMATCH','NO CHANGE' (same Bayloc)
+			--	If no errors found, Update veh table w/new Bayloc
+
+			IF EXISTS (SELECT VIN FROM @tmp_dups)
+			BEGIN -- #1
+
+				PRINT '1ST Dup test passed';
+
+				-- Check for Customer Mismatch in @tmp_dups with 
+				--	1st VIN in @tmp_output
+				UPDATE @tmp_output 
+				SET status='CUSTOMER MISMATCH',importstatus='CUSTOMER MISMATCH'
+				WHERE ImportID IN
+				(SELECT dups.ImportID
+				FROM @tmp_dups dups
+				INNER JOIN @tmp_output out on out.ImportID=dups.ImportID
+				WHERE dups.CustomerID <> out.CustomerID);
+
+				-- Check for Destination Mismatch in @tmp_dups with 
+				--	1st VIN in @tmp_output
+				UPDATE @tmp_output 
+				SET status='DESTINATION MISMATCH',importstatus='DESTINATION MISMATCH'
+				WHERE ImportID IN
+				(SELECT dups.ImportID
+				FROM @tmp_dups dups
+				INNER JOIN @tmp_output out on out.ImportID=dups.ImportID
+				WHERE dups.DestinationName <> out.DestinationName);
+
+				-- Remove MISMATCH recs from @tmp_dups
+				DELETE @tmp_dups WHERE status IS NOT NULL;
+
+				-- Loop through each update in @tmp_dups, 
+				--	change Bayloc in 1st VIN if new Bayloc
+				IF EXISTS (SELECT VIN FROM @tmp_dups)
+				BEGIN	-- #2
+					-- Set ID values 1..n in @tmp_dups
+					-- Update BOTH @id AND the ID column to @id + 1;
+					UPDATE @tmp_dups 
+					SET @ID_dups = ID = @ID_dups + 1;
+
+					SET @ID_dups_current = 1;
+
+					SELECT @ID_dups_max = MAX(ID) 
+					FROM @tmp_dups;
+
+					WHILE @ID_dups_current <= @ID_dups_max
+					BEGIN	-- #3
+						-- Get the current row VIN, BayLocation
+						SELECT @VIN = RTRIM(VIN),@Bayloc_new=RTRIM(BayLocation_imp),@ID_dups=ImportID 
+						From @tmp_dups WHERE ID=@ID_dups_current;
+					
+						-- Set @ID_output to 1st VIN rec in @tmp_output
+						SELECT @ID_output = ImportID from @tmp_output
+						WHERE RTRIM(VIN) = @VIN AND importstatus='Imported';
+
+						-- Get current Bayloc from 1st rec in @tmp_output
+						SELECT @Bayloc_current = BayLocation_imp 
+						FROM @tmp_output
+						WHERE ImportID=@ID_output;
+
+						IF @Bayloc_current <> @Bayloc_new
+						BEGIN	-- #4
+							-- Update current Bayloc in @tmp_output
+							UPDATE @tmp_output
+							SET BayLocation_imp = @Bayloc_new
+							WHERE ImportID=@ID_output;
+
+							-- Update status in @tmp_output for ID_dups row
+							UPDATE @tmp_output
+							SET status = 'BAY LOCATION CHANGED',
+								importstatus = 'BAY LOCATION CHANGED',
+								importedind=1
+							WHERE ImportID=@ID_dups;							
+
+							-- Update veh table
+							UPDATE AutoportExportVehicles 
+							SET BayLocation=@Bayloc_new, UpdatedBy=@UserCode,UpdatedDate=@CreationDate
+							WHERE VIN = @VIN;
+						END
+						ELSE
+						BEGIN
+							-- Update status in @tmp_output
+							UPDATE @tmp_output
+							SET status = 'NO CHANGE',
+							importstatus = 'NO CHANGE'
+							WHERE ImportID = @ID_dups;
+						END	-- #4, IF @Bayloc_current <> @Bayloc_new
+					
+						-- Get next ImportID from tmp_dups
+						SET @ID_dups_current = @ID_dups_current + 1;
+
+					END	-- #3, WHILE Loop
+				END	-- #2,IF recs in @tmp_dups, 				
+			END	-- #1, IF recs in @tmp_dups, after error ck'ng
+		END -- #0, IF NOMATCH recs
+
+	--	Process ONEMATCH recs in @tmp_output, if any
+	--	Create @tmp_update to update veh table with one update statement
+	--	Load @tmp_dups with dup ONEMATCH VINS, if any: 
+	--	UPDATE Bayloc in tmp_ONEMATCH table with First VIN rec
+	--	For each dup VIN rec in tmp_dups: Ck for 'CUSTOMER MISMATCH', 'DESTINATION MISMATCH','NO CHANGE' (same Bayloc)
+	--	If no errors found, Update veh table w/new Bayloc
+
+	-- @tmp_update to hold both veh info and import info for ONEMATCH recs
+		--	in @tmp_output
+		DECLARE 
+		@tmp_update TABLE
+		(ImportID int,
+		VehID int,
+		DateReceived datetime,
+		VehicleStatus varchar(20), 
+		VIN varchar(17),
+		BayLocation_veh varchar(20),
+		BayLocation_imp varchar(20),
+		VIVTagNumber_veh varchar(10),
+		VIVTagNumber_imp varchar(10),
+		importstatus varchar(100),
+		UpdateInd int);		
+
+	IF EXISTS (SELECT VIN FROM @tmp_output WHERE status = 'ONEMATCH')
+	BEGIN	-- #0
+		-- Load tmp_output with veh BayLoc & VIVTagNumber
+		UPDATE tmp
+		SET tmp.BayLocation_veh=veh.BayLocation,
+		tmp.VIVTagNumber_veh=veh.VIVTagNumber
+		FROM
+		@tmp_output tmp
+		INNER JOIN AutoportExportVehicles veh on veh.VIN=tmp.VIN
+		WHERE tmp.status='ONEMATCH';
+
+		-- Load tmp_dups with any dup ONEMATCH VINS
+		delete @tmp_dups;
+
+		WITH dupVINs AS
+		(select VIN,COUNT(VIN) AS totrecs 
+		from @tmp_output 
+		WHERE status='ONEMATCH'
+		GROUP BY VIN
+		HAVING COUNT(VIN) > 1)
+		INSERT INTO @tmp_dups (ImportID,VIN,BayLocation_imp,BayLocation_veh,VIVTagNumber_imp,VIVTagNumber_veh)
+		SELECT ImportID,VIN,BayLocation_imp,BayLocation_veh,
+		VIVTagNumber_imp,VIVTagNumber_veh 
+		FROM @tmp_output
+		WHERE VIN IN (SELECT VIN FROM dupVINs)
+		ORDER BY ImportID;
+
+		-- Remove from @tmp_dups, 1st row for each VIN, will be inserted as new rec in veh table 
+		WITH CTE AS
+		(SELECT *,ROW_NUMBER() OVER (PARTITION BY VIN ORDER BY VIN,ImportID) AS RN FROM @tmp_dups)
+		DELETE FROM CTE WHERE RN=1;
+
+		-- Update @tmp_output, set Status to 'DUP' for each row in tmp_dups
+		UPDATE @tmp_output SET status='DUP' WHERE ImportID in (SELECT ImportID from @tmp_dups);
+
+		-- Load @tmp_update with original ONEMATCH recs from @tmp_output
+		INSERT INTO @tmp_update (ImportID,VehID,DateReceived,
+		VehicleStatus,VIN,
+		BayLocation_veh,BayLocation_imp,VIVTagNumber_veh,VIVTagNumber_imp)
+		SELECT tmp.ImportID,
+		veh.AutoportExportVehiclesID AS VehID,
+		veh.DateReceived,
+		veh.VehicleStatus,
+		tmp.VIN,
+		tmp.BayLocation_veh,
+		tmp.BayLocation_imp,
+		tmp.VIVTagNumber_veh,
+		tmp.VIVTagNumber_imp
+		FROM @tmp_output tmp
+		INNER JOIN AutoportExportVehicles veh on veh.VIN=tmp.VIN
+		WHERE tmp.status = 'ONEMATCH';
+		
+		-- Process @tmp_update
+		-- Set UpdateInd = 1 for rows that will update the veh table
+		-- BayLocation_veh/VIVTagNumber_veh hold the final update value for the veh table
+		-- importstatus holds the Status update to the Import table. Set to 'NO CHANGE' if BayLoc & VIVTagNumber don't change
+		-- VehicleStatus is the update to the VehicleStatus field in the veh table; 'same' means no change in veh table
+
+		-- Update @tmp_update  WHERE DateReceived IS NULL AND vehstatus = 'Pending'
+		-- Can only occur if User manually sets status.
+		IF EXISTS (SELECT VIN FROM @tmp_update 
+		WHERE VehicleStatus='Pending' AND DateReceived IS NULL)
+		BEGIN
+			UPDATE @tmp_update
+			SET VehicleStatus='Received',
+			importstatus = 'Imported',
+			UpdateInd = 1,
+			BayLocation_veh = BayLocation_imp,
+			VIVTagNumber_veh = 
+				CASE
+					WHEN LEN(RTRIM(ISNULL(VIVTagNumber_imp,''))) > 0 AND VIVTagNumber_imp <> '0'
+						THEN VIVTagNumber_imp
+					ELSE VIVTagNumber_veh
+				END
+			WHERE VehicleStatus='Pending' AND DateReceived IS NULL;
+		END
+
+		-- Update @tmp_update WHERE VehStaus <> 'Pending'. If difference BayLoc, VIVTagNumber then update,
+		--	else set status to NO CHANGE
+		UPDATE @tmp_update
+		SET 
+			VehicleStatus='same',
+			importstatus = 
+				CASE
+					WHEN BayLocation_imp=BayLocation_veh AND VIVTagNumber_imp=VIVTagNumber_veh THEN 'NO CHANGE'
+					WHEN BayLocation_imp<>BayLocation_veh THEN 'BAY LOCATION UPDATED'
+					WHEN VIVTagNumber_imp<>VIVTagNumber_veh THEN 'VIVTAGNUMBER UPDATED'
+					ELSE 'Imported'
+				END,
+			UpdateInd = 
+				CASE
+					WHEN BayLocation_imp=BayLocation_veh AND VIVTagNumber_imp=VIVTagNumber_veh THEN 0
+					ELSE 1
+				END,
+			BayLocation_veh = BayLocation_imp,
+			VIVTagNumber_veh = 
+				CASE
+					WHEN LEN(RTRIM(ISNULL(VIVTagNumber_imp,''))) > 0 AND VIVTagNumber_imp <> '0'
+						THEN VIVTagNumber_imp
+					ELSE VIVTagNumber_veh
+				END
+		WHERE VehicleStatus<>'Pending';
+
+		-- Loop through dup recs, if any
+		-- Update @tmp_update table, BayLoc_veh & VIVTagNumber_veh with any dup recs that have different values
+		--	If dup values used, set dup status to BAY LOC CHANGED / VIVTAGNUMER CHANGED
+		--	If dup values are not used, set dup status to NO CHANGE
+		IF EXISTS (SELECT VIN FROM @tmp_dups)
+		BEGIN	--#1
+			-- To set up the ID column currently NULL, to 1,2, ... Update BOTH @id AND the ID column to @id + 1;
+			UPDATE @tmp_dups 
+			SET @ID_dups = ID = @ID_dups + 1;
+
+			-- Initialize the loop counters
+			SET @ID_dups_current = 1;
+
+			SELECT @ID_dups_max = MAX(ID) 
+			FROM @tmp_dups;
+
+			-- Loop through tmp_dups
+			WHILE @ID_dups_current <= @ID_dups_max
+			BEGIN	-- #2
+				-- Get the current row VIN, Bayloc_new, VIVTagNumber_new, ID_output
+				SELECT @VIN = VIN,
+					@Bayloc_new = BayLocation_imp,
+					@VIVTagNumber_new = VIVTagNumber_imp,
+					@ID_dups = ImportID
+				FROM @tmp_dups 
+				WHERE ID=@ID_dups_current;
+
+				-- Get @ID_output, as the row in tmp_Update
+				SELECT @ID_output = ImportID 
+				FROM @tmp_update
+				WHERE VIN = @VIN;
+				
+				-- Get @Bayloc_current, VIVTagNumber_current from the Original row in @tmp_update
+				SELECT @Bayloc_current = BayLocation_veh,
+				@VIVTagNumber_current = VIVTagNumber_veh
+				FROM @tmp_update
+				WHERE ImportID = @ID_output;
+
+				-- Process Bayloc Change
+				IF @Bayloc_current <> @Bayloc_new
+				BEGIN	
+					-- Update current Bayloc_veh in @tmp_update
+					UPDATE @tmp_update
+					SET BayLocation_veh = @Bayloc_new,importstatus='Imported',UpdateInd=1
+					WHERE ImportID=@ID_output;
+
+					-- Update importstatus in @tmp_dups for 
+					UPDATE @tmp_dups
+					SET importstatus = 'BAY LOCATION CHANGED',
+						importedind=1
+					WHERE ID = @ID_dups_current;
+				END
+				
+				-- Process VIVTagNumber change	
+				IF @VIVTagNumber_current <> @VIVTagNumber_new AND 
+				LEN(@VIVTagNumber_current) > 0 AND
+				@VIVTagNumber_current <> '0'
+				BEGIN	
+					-- Update current Bayloc_veh in @tmp_update
+					UPDATE @tmp_update
+					SET VIVTagNumber_veh = @VIVTagNumber_current,importstatus='Imported',UpdateInd=1
+					WHERE ImportID=@ID_output;
+
+					-- Update importstatus in @tmp_dups for 
+					UPDATE @tmp_dups
+					SET importstatus = 'VIVTAGNUMBER CHANGED',
+						importedind=1
+					WHERE ID = @ID_dups_current;
+				END
+			END		-- End WHILE loop #2
+
+			-- Update importstatus in @tmp_output from @tmp_update
+			UPDATE out
+			SET importstatus=up.importstatus,importedind=up.UpdateInd
+			FROM @tmp_output out
+			INNER JOIN @tmp_update up on up.ImportID=out.ImportID;
+
+			-- Update importstatus in @tmp_output from @tmp_dups
+			UPDATE out
+			SET importstatus=dups.importstatus,importedind=dups.importedind
+			FROM @tmp_dups dups
+			INNER JOIN @tmp_output out on out.ImportID=dups.ImportID;
+
+		END	-- If VINs in @tmp_dups, #1
+	END	-- If there are ONEMATCH recs in @tmp_output, #0
+
+	-- Need to update Import table with new status
+	-- May need to update Veh table, if recs in @tmp_update
+	BEGIN TRAN
+		UPDATE imp
+			SET imp.RecordStatus=
+				CASE
+					WHEN tmp.importedind=1 AND tmp.SizeClass IS NULL THEN 'SIZE CLASS NEEDED'
+					ELSE tmp.importstatus
+				END,
+				imp.ImportedInd=tmp.importedind,
+				ImportedBy=
+				CASE
+					WHEN tmp.importedind=1 THEN @UserCode
+					ELSE NULL
+				END,
+				ImportedDate=
+					CASE 
+						WHEN tmp.importedind=1 THEN @CreationDate
+						ELSE NULL
+					END
+			FROM AutoportExportVehiclesImport imp
+			INNER JOIN @tmp_output tmp on tmp.ImportID=imp.AutoportExportVehiclesImportID
+
+			-- Update veh table from @tmp_output
+			IF EXISTS (SELECT VIN FROM @tmp_update)
+			UPDATE veh
+			SET
+			veh.LastPhysicalBy =@fullname,
+			veh.LastPhysicalDate = @CreationDate,
+			veh.BayLocation = tmp.BayLocation_veh,
+			veh.VehicleStatus =
+			CASE 
+				WHEN tmp.VehicleStatus = 'same' THEN veh.VehicleStatus
+				ELSE tmp.VehicleStatus
+			END,
+			veh.VIVTagNumber =
+			CASE
+				WHEN tmp.VIVTagNumber_veh <> '0' AND 
+					LEN(RTRIM(ISNULL(tmp.VIVTagNumber_veh,''))) > 0 THEN tmp.VIVTagNumber_veh
+				ELSE veh.VIVTagNumber
+			END,
+			veh.UpdatedBy = @UserCode,
+			veh.UpdatedDate = @CreationDate
+			FROM @tmp_update tmp
+			INNER JOIN AutoportExportVehicles veh on veh.vin=tmp.VIN
+		WHERE tmp.UpdateInd=1;
+	
+	END TRY
+
+	-- Based on Microsoft example: 
+	-- https://docs.microsoft.com/en-us/sql/t-sql/language-elements/try-catch-transact-sql
+	BEGIN CATCH
+		SELECT
+		'ERROR' AS result,
+		ERROR_NUMBER() AS ErrorNumber,
+		ERROR_SEVERITY() AS ErrorSeverity,
+		ERROR_STATE() AS ErrorState,
+		ERROR_PROCEDURE() AS ErrorProcedure,
+		ERROR_LINE() AS ErrorLine,
+		ERROR_MESSAGE() AS ErrorMessage;
+
+		-- Delete new recs in AEVehicleInspection
+		DELETE AutoportExportVehicles WHERE @CreationDate = @CreationDate;
+
+		IF @@TRANCOUNT > 0  ROLLBACK TRAN;
+	END CATCH
+
+	IF @@TRANCOUNT > 0 
+	BEGIN
+		COMMIT TRAN;	
+		SELECT 'OK' AS result;
+	END
+END
